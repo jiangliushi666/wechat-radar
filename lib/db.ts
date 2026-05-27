@@ -154,6 +154,35 @@ function migrate(d: Database.Database) {
       total_messages INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS known_sessions (
+      username TEXT PRIMARY KEY,
+      chat TEXT NOT NULL,
+      chat_type TEXT NOT NULL,
+      is_group INTEGER NOT NULL,
+      last_msg_type TEXT NOT NULL,
+      last_sender TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      time TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      unread INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_known_sessions_group_timestamp
+      ON known_sessions(is_group, timestamp DESC);
+
+    CREATE TABLE IF NOT EXISTS ignored_items (
+      kind TEXT NOT NULL,
+      item_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      note TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (kind, item_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ignored_items_kind_created
+      ON ignored_items(kind, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

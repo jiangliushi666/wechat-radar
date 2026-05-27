@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { db } from './db';
-import { wxSessions } from './wx';
 import { cache } from './cache';
+import { loadSessionsSafe, sessionNameMap } from './session-source';
 
 const MAX_MESSAGES = 5000;
 const MAX_ITEMS_PER_KIND = 24;
@@ -13,6 +13,7 @@ const TITLE_FETCH_TIMEOUT_MS = 1400;
 const MAX_TITLE_GENERATION_ITEMS = 80;
 const CODEX_TIMEOUT_MS = Number(process.env.WECHAT_RADAR_LINK_CODEX_TIMEOUT_MS ?? 180_000);
 const CODEX_MODEL = process.env.WECHAT_RADAR_CODEX_MODEL;
+const CODEX_BIN = process.env.WECHAT_RADAR_CODEX_BIN || 'codex';
 const LINK_INTELLIGENCE_CACHE_VERSION = 'v8';
 const LINK_INTELLIGENCE_CACHE_TTL_SECONDS = 60 * 60 * 24;
 
@@ -295,6 +296,22 @@ function parseJsonOutput<T>(raw: string): T {
   }
 }
 
+function codexSpawnArgs(args: string[]) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(CODEX_BIN)) {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `call "${CODEX_BIN}" ${args.map(windowsShellArg).join(' ')}`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command: CODEX_BIN, args, windowsVerbatimArguments: false };
+}
+
+function windowsShellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=@-]+$/.test(value)) return value;
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
 function runCodexJson<T>(prompt: string, schema: unknown, timeoutMs = CODEX_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const dir = mkdtempSync(join(tmpdir(), 'wechat-links-'));
@@ -318,7 +335,9 @@ function runCodexJson<T>(prompt: string, schema: unknown, timeoutMs = CODEX_TIME
     if (CODEX_MODEL) args.push('--model', CODEX_MODEL);
     args.push('-');
 
-    const proc = spawn('codex', args, {
+    const codex = codexSpawnArgs(args);
+    const proc = spawn(codex.command, codex.args, {
+      windowsVerbatimArguments: codex.windowsVerbatimArguments,
       env: { ...process.env, NO_COLOR: '1' },
       stdio: ['pipe', 'ignore', 'pipe'],
     });
@@ -527,9 +546,7 @@ export async function getDailyLinkIntelligence(
     )
     .all(date, MAX_MESSAGES) as MessageLinkRow[];
 
-  const sessions = await wxSessions(500).catch(() => []);
-  const names = new Map<string, string>();
-  for (const s of sessions) names.set(s.username, s.chat);
+  const names = sessionNameMap((await loadSessionsSafe(500)).sessions);
 
   const buckets = new Map<string, LinkIntelligenceItem>();
 

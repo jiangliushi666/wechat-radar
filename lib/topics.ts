@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { db } from './db';
-import { wxSessions } from './wx';
+import { loadSessionsSafe, sessionNameMap } from './session-source';
 
 const MIN_MESSAGES_PER_TOPIC = 4;
 const MIN_MESSAGE_LENGTH = 20;
@@ -13,6 +13,7 @@ const MAX_TOPICS_TO_SAVE = 30;
 const CODEX_CHUNK_SIZE = Number(process.env.WECHAT_RADAR_TOPIC_CHUNK_SIZE ?? 250);
 const CODEX_TIMEOUT_MS = Number(process.env.WECHAT_RADAR_CODEX_TIMEOUT_MS ?? 300_000);
 const CODEX_MODEL = process.env.WECHAT_RADAR_CODEX_MODEL;
+const CODEX_BIN = process.env.WECHAT_RADAR_CODEX_BIN || 'codex';
 const TOPICS_PER_CHUNK = 12;
 
 interface SourceMsg {
@@ -173,6 +174,22 @@ function parseJsonOutput<T>(raw: string): T {
   }
 }
 
+function codexSpawnArgs(args: string[]) {
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(CODEX_BIN)) {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `call "${CODEX_BIN}" ${args.map(windowsShellArg).join(' ')}`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command: CODEX_BIN, args, windowsVerbatimArguments: false };
+}
+
+function windowsShellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=@-]+$/.test(value)) return value;
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
 function runCodexJson<T>(prompt: string, timeoutMs = CODEX_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
     const dir = mkdtempSync(join(tmpdir(), 'wechat-topics-'));
@@ -196,11 +213,12 @@ function runCodexJson<T>(prompt: string, timeoutMs = CODEX_TIMEOUT_MS): Promise<
     if (CODEX_MODEL) args.push('--model', CODEX_MODEL);
     args.push('-');
 
-    const proc = spawn(
-      'codex',
-      args,
-      { env: { ...process.env, NO_COLOR: '1' }, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    const codex = codexSpawnArgs(args);
+    const proc = spawn(codex.command, codex.args, {
+      windowsVerbatimArguments: codex.windowsVerbatimArguments,
+      env: { ...process.env, NO_COLOR: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
     const t = setTimeout(() => {
@@ -412,9 +430,7 @@ export async function buildTopicsForDate(
     return { topics: 0, messages: 0 };
   }
 
-  const sessions = await wxSessions(500).catch(() => []);
-  const groupNameMap = new Map<string, string>();
-  for (const s of sessions) groupNameMap.set(s.username, s.chat);
+  const groupNameMap = sessionNameMap((await loadSessionsSafe(500)).sessions);
 
   const valid = await aggregateWithCodex(date, msgs, groupNameMap, onProgress);
 
@@ -521,9 +537,7 @@ export async function getTopicDetail(id: number): Promise<TopicDetail | null> {
     score: number;
   }>;
 
-  const sessions = await wxSessions(500).catch(() => []);
-  const nameMap = new Map<string, string>();
-  for (const s of sessions) nameMap.set(s.username, s.chat);
+  const nameMap = sessionNameMap((await loadSessionsSafe(500)).sessions);
 
   return {
     ...topic,

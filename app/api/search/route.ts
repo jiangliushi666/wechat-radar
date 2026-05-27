@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { wxSessions } from '@/lib/wx';
+import { loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -149,7 +149,7 @@ export async function GET(req: NextRequest) {
 async function loadGroupNames(): Promise<Map<string, string>> {
   const names = new Map<string, string>();
   try {
-    const sessions = await wxSessions(500);
+    const { sessions } = await loadSessionsSafe(500);
     for (const s of sessions) {
       if (s.is_group) names.set(s.username, s.chat);
     }

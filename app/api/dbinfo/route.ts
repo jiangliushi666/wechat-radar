@@ -15,6 +15,8 @@ export async function GET() {
     messages: (db().prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n,
     daily_stats: (db().prepare('SELECT COUNT(*) AS n FROM daily_stats').get() as { n: number }).n,
     sync_state: (db().prepare('SELECT COUNT(*) AS n FROM sync_state').get() as { n: number }).n,
+    known_sessions: (db().prepare('SELECT COUNT(*) AS n FROM known_sessions').get() as { n: number }).n,
+    known_groups: (db().prepare('SELECT COUNT(*) AS n FROM known_sessions WHERE is_group = 1').get() as { n: number }).n,
   };
   const topGroups = db().prepare(`
     SELECT chatroom_id, COUNT(*) AS n FROM messages GROUP BY chatroom_id ORDER BY n DESC LIMIT 5

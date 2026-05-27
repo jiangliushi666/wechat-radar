@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import MessageContent from '@/components/MessageContent';
@@ -42,7 +42,6 @@ export default function TopicsPage() {
   const [detail, setDetail] = useState<{ topic: Topic; messages: TopicMessage[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<string | undefined>(undefined);
-  const autoBuildDates = useRef(new Set<string>());
 
   const reload = useCallback(async () => {
     try {
@@ -99,7 +98,7 @@ export default function TopicsPage() {
     setBusy(true);
     setInfo('启动 Codex CLI 话题聚合…');
     try {
-      const r = await fetch('/api/topics/build', {
+      const r = await fetch('/api/topics', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ date }),
@@ -148,12 +147,6 @@ export default function TopicsPage() {
       reload();
     }
   }, [date, reload]);
-
-  useEffect(() => {
-    if (busy || topics.length > 0 || autoBuildDates.current.has(date)) return;
-    autoBuildDates.current.add(date);
-    build();
-  }, [build, busy, date, topics.length]);
 
   return (
     <div className="flex h-screen">

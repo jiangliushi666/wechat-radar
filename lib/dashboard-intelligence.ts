@@ -1,6 +1,7 @@
 import { db } from './db';
 import { cache } from './cache';
 import { todayStr } from './range';
+import { dashboardSignalKey, listIgnoredItemKeys } from './ignored-items';
 
 const MAX_ROWS = 1600;
 const MAX_MUST_READ = 8;
@@ -150,9 +151,10 @@ export function buildDashboardIntelligence(
   groupNames = new Map<string, string>(),
 ): DashboardIntelligence {
   date = resolveIntelligenceDate(date);
-  const key = `dashboard-intelligence:${date}:v14`;
+  const key = `dashboard-intelligence:${date}:v15`;
   const cached = cache.get(key) as DashboardIntelligence | undefined;
   if (cached) return cached;
+  const ignoredSignals = listIgnoredItemKeys('dashboard_signal');
 
   const rows = db()
     .prepare(
@@ -241,6 +243,7 @@ export function buildDashboardIntelligence(
 
   const seenSnippets = new Set<string>();
   for (const row of rows) {
+    if (ignoredSignals.has(dashboardSignalKey(row.chatroom_id, row.local_id))) continue;
     const clean = cleanContent(row.content);
     if (!clean || NOISE_RE.test(row.content)) continue;
 

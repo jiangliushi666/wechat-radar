@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { todayStr } from '@/lib/range';
 import { db } from '@/lib/db';
 import { listMessagesForDate, getSyncState, listAllSyncedDates } from '@/lib/messages-store';
-import { wxSessions } from '@/lib/wx';
+import { loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +24,7 @@ export async function GET(
   // 拉群名（从 wx sessions）
   let chatName = chatroomId;
   try {
-    const sessions = await wxSessions(500);
+    const { sessions } = await loadSessionsSafe(500);
     const found = sessions.find((s) => s.username === chatroomId);
     if (found) chatName = found.chat;
   } catch {}

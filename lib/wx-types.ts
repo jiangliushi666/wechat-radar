@@ -1,6 +1,6 @@
 export interface WxSession {
   chat: string;
-  chat_type: 'private' | 'group';
+  chat_type: 'private' | 'group' | 'official_account' | 'folded' | string;
   is_group: boolean;
   last_msg_type: string;
   last_sender: string;
@@ -35,6 +35,7 @@ export interface WxStats {
   by_hour: WxStatsBucket[];
   by_type: WxStatsType[];
   top_senders: WxStatsSender[];
+  meta?: unknown;
 }
 
 export interface WxMessage {

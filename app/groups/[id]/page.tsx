@@ -8,6 +8,7 @@ import Sidebar from '@/components/Sidebar';
 import MessageContent from '@/components/MessageContent';
 import {
   ArrowLeft,
+  ArrowDownUp,
   BarChart3,
   Calendar,
   Check,
@@ -72,6 +73,16 @@ export default function GroupDetailPage({
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [messageOrder, setMessageOrder] = useState<'asc' | 'desc'>('asc');
+  const orderedMessages = useMemo(() => {
+    const messages = [...(data?.recent ?? [])];
+    return messages.sort((a, b) => {
+      const order =
+        (a.timestamp - b.timestamp) ||
+        (a.local_id - b.local_id);
+      return messageOrder === 'asc' ? order : -order;
+    });
+  }, [data?.recent, messageOrder]);
 
   const load = async (d: string) => {
     setLoading(true);
@@ -125,7 +136,7 @@ export default function GroupDetailPage({
   };
 
   const copyMessages = async () => {
-    const messages = data?.recent ?? [];
+    const messages = orderedMessages;
     if (messages.length === 0) return;
     const title = data?.stats?.chat ?? chatroomId;
     const text = [
@@ -334,6 +345,15 @@ export default function GroupDetailPage({
               </div>
               <div className="flex items-center gap-2">
                 <button
+                  className={`btn py-1 text-[12px] ${messageOrder === 'desc' ? 'btn-primary' : ''}`}
+                  onClick={() => setMessageOrder((cur) => (cur === 'asc' ? 'desc' : 'asc'))}
+                  disabled={loading || (data?.recent.length ?? 0) === 0}
+                  title="切换消息展示顺序"
+                >
+                  <ArrowDownUp size={13} />
+                  <span>{messageOrder === 'asc' ? '正序' : '倒序'}</span>
+                </button>
+                <button
                   className="btn py-1 text-[12px]"
                   onClick={copyMessages}
                   disabled={loading || (data?.recent.length ?? 0) === 0}
@@ -353,7 +373,7 @@ export default function GroupDetailPage({
               </div>
             ) : (
               <div className="divide-y divide-[var(--border-soft)]">
-                {(data?.recent ?? []).map((m) => (
+                {orderedMessages.map((m) => (
                   <div
                     key={m.local_id}
                     className="grid grid-cols-[120px_1fr_60px_70px] gap-3 px-5 py-2 text-[12px] hover:bg-[var(--surface-2)]"

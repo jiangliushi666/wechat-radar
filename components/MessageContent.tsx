@@ -1,6 +1,64 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+
 const IMG_RE = /\[图片\]\s*local_id=(\d+)/g;
+
+function WxImage({
+  chatroomId,
+  localId,
+}: {
+  chatroomId: string;
+  localId: number;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    (async () => {
+      try {
+        const url = `/api/wx-image?chatroom=${encodeURIComponent(chatroomId)}&local_id=${localId}`;
+        const res = await fetch(url);
+        const contentType = res.headers.get('content-type') ?? '';
+        if (!res.ok || res.status === 204 || !contentType.startsWith('image/')) {
+          if (!cancelled) setMissing(true);
+          return;
+        }
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setSrc(objectUrl);
+      } catch {
+        if (!cancelled) setMissing(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [chatroomId, localId]);
+
+  if (missing) {
+    return <span className="text-[var(--text-3)]">{`[图片缺失 local_id=${localId}]`}</span>;
+  }
+
+  if (!src) {
+    return <span className="text-[var(--text-3)]">{`[图片 local_id=${localId}]`}</span>;
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={`图片 ${localId}`}
+      loading="lazy"
+      className="my-1 inline-block max-h-[280px] max-w-full rounded border border-[var(--border)] align-middle"
+    />
+  );
+}
 
 export default function MessageContent({
   content,
@@ -35,25 +93,7 @@ export default function MessageContent({
     <span className="whitespace-pre-wrap break-words">
       {parts.map((p, i) => {
         if (p.type === 'text') return <span key={i}>{p.v}</span>;
-        return (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={i}
-            src={`/api/wx-image?chatroom=${encodeURIComponent(chatroomId)}&local_id=${p.localId}`}
-            alt={`图片 ${p.localId}`}
-            loading="lazy"
-            className="my-1 inline-block max-h-[280px] max-w-full rounded border border-[var(--border)] align-middle"
-            onError={(e) => {
-              const el = e.currentTarget;
-              el.replaceWith(
-                Object.assign(document.createElement('span'), {
-                  className: 'text-[var(--text-3)]',
-                  textContent: `[图片缺失 local_id=${p.localId}]`,
-                }) as HTMLElement,
-              );
-            }}
-          />
-        );
+        return <WxImage key={i} chatroomId={chatroomId} localId={p.localId} />;
       })}
     </span>
   );

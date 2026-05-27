@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { wxSessions } from '@/lib/wx';
 import { todayStr } from '@/lib/range';
+import { loadSessionsSafe, sessionNameMap } from '@/lib/session-source';
+import { syncChangedSessions } from '@/lib/stats-aggregator';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +21,9 @@ type RawLinkRow = {
 
 export async function GET(req: NextRequest) {
   const date = new URL(req.url).searchParams.get('date') ?? todayStr();
-  const names = await groupNames();
+  const sessionLoad = await loadSessionsSafe(500);
+  await syncChangedSessions({ sessions: sessionLoad.sessions, since: date, until: date }).catch(() => null);
+  const names = sessionNameMap(sessionLoad.sessions);
   const rows = db()
     .prepare(
       `SELECT chatroom_id, local_id, sender, time, url, canonical_url, title, domain, source, raw_kind
@@ -40,13 +43,4 @@ export async function GET(req: NextRequest) {
       chat_name: names.get(row.chatroom_id) ?? row.chatroom_id,
     })),
   });
-}
-
-async function groupNames() {
-  const names = new Map<string, string>();
-  try {
-    const sessions = await wxSessions(500);
-    for (const s of sessions) names.set(s.username, s.chat);
-  } catch {}
-  return names;
 }

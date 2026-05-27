@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
-import { wxSessions } from '@/lib/wx';
-import type { WxSession } from '@/lib/wx-types';
-import { cache, CK } from '@/lib/cache';
 import { listGroups, listAllTags, listFavorites } from '@/lib/groups';
 import { effectiveGroupIds } from '@/lib/group-classifier';
-import { db } from '@/lib/db';
-import { readConfig } from '@/lib/config';
+import { loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const sessions = await loadSessionsSafe(500);
+    const sessionLoad = await loadSessionsSafe(500);
+    const sessions = sessionLoad.sessions;
 
     const groups = listGroups();
     const tags = listAllTags();
@@ -63,64 +60,19 @@ export async function GET() {
       total: groupsList.length,
       groups: enriched,
       categories,
+      session_source: {
+        source: sessionLoad.source,
+        partial: sessionLoad.partial,
+        total: sessionLoad.total,
+        groups: sessionLoad.groupCount,
+        live_total: sessionLoad.liveCount,
+        live_groups: sessionLoad.liveGroupCount,
+        known_total: sessionLoad.knownCount,
+        known_groups: sessionLoad.knownGroupCount,
+      },
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'unknown error';
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
-}
-
-async function loadSessionsSafe(limit: number): Promise<WxSession[]> {
-  if (readConfig().demoMode) return listLocalSessionsFallback(limit);
-  const cached = cache.get(CK.sessions()) as WxSession[] | undefined;
-  try {
-    const sessions = await wxSessions(limit);
-    cache.set(CK.sessions(), sessions, 60);
-    return sessions;
-  } catch (e) {
-    if (cached?.length) return cached;
-    console.warn('wx sessions failed, falling back to local radar.db', e);
-    return listLocalSessionsFallback(limit);
-  }
-}
-
-function listLocalSessionsFallback(limit: number): WxSession[] {
-  const rows = db()
-    .prepare(
-      `
-      SELECT m.chatroom_id, m.sender, m.content, m.time, m.timestamp, m.type
-      FROM messages m
-      JOIN (
-        SELECT chatroom_id, MAX(timestamp) AS timestamp
-        FROM messages
-        GROUP BY chatroom_id
-      ) latest
-        ON latest.chatroom_id = m.chatroom_id
-       AND latest.timestamp = m.timestamp
-      GROUP BY m.chatroom_id
-      ORDER BY m.timestamp DESC
-      LIMIT ?
-    `,
-    )
-    .all(limit) as Array<{
-    chatroom_id: string;
-    sender: string;
-    content: string;
-    time: string;
-    timestamp: number;
-    type: string;
-  }>;
-
-  return rows.map((r) => ({
-    chat: r.chatroom_id,
-    chat_type: 'group',
-    is_group: true,
-    last_msg_type: r.type,
-    last_sender: r.sender,
-    summary: r.content,
-    time: r.time,
-    timestamp: r.timestamp,
-    unread: 0,
-    username: r.chatroom_id,
-  }));
 }

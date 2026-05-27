@@ -4,10 +4,13 @@ import { wxHistory, wxStats } from './wx';
 import {
   aggregateDailyStats,
   bulkInsertMessages,
+  dateOfMessage,
+  latestMessageTimestamps,
   upsertSyncState,
 } from './messages-store';
 import { rebuildMentionIndexFromMessages } from './mentions';
-import type { WxStats } from './wx-types';
+import { cache } from './cache';
+import type { WxMessage, WxSession, WxStats } from './wx-types';
 
 export type StatsRow = {
   chatroom_id: string;
@@ -127,6 +130,12 @@ export interface SyncOptions {
   onProgress?: (p: RescanProgress) => void;
 }
 
+const HISTORY_PAGE_SIZE = Number(process.env.WECHAT_RADAR_HISTORY_PAGE_SIZE ?? 10000);
+const HISTORY_MAX_PAGES = Number(process.env.WECHAT_RADAR_HISTORY_MAX_PAGES ?? 30);
+const INCREMENTAL_MAX_TARGETS = Number(process.env.WECHAT_RADAR_INCREMENTAL_MAX_TARGETS ?? 120);
+const INCREMENTAL_LOOKBACK_DAYS = Number(process.env.WECHAT_RADAR_INCREMENTAL_LOOKBACK_DAYS ?? 2);
+const INCREMENTAL_CONCURRENCY = Number(process.env.WECHAT_RADAR_INCREMENTAL_CONCURRENCY ?? 2);
+
 // Helper: split a date range into month chunks ([{since, until}, ...])
 function monthChunks(since: string, until: string): Array<{ since: string; until: string }> {
   const chunks: Array<{ since: string; until: string }> = [];
@@ -208,7 +217,7 @@ export async function syncFullHistory({
         limit(async () => {
           const state = byTarget.get(t.chatroomId)!;
           try {
-            const messages = await wxHistory(t.chatroomId, c.since, c.until, 50_000);
+            const messages = await wxHistoryPaged(t.chatroomId, c.since, c.until);
             const inserted = bulkInsertMessages(t.chatroomId, messages);
             state.fetched += messages.length;
             state.inserted += inserted;
@@ -294,6 +303,7 @@ export async function syncFullHistory({
   );
 
   rebuildMentionIndexFromMessages();
+  if (totalMessages > 0) clearDerivedCaches(dates);
 
   onProgress?.({
     type: 'done',
@@ -303,6 +313,202 @@ export async function syncFullHistory({
   });
 
   return { ok, failed, messages: totalMessages };
+}
+
+export interface IncrementalSyncResult {
+  checked: number;
+  targets: number;
+  ok: number;
+  failed: number;
+  fetched: number;
+  inserted: number;
+  affectedDates: string[];
+  failedTargets: Array<{ chatroom_id: string; name: string; error: string }>;
+}
+
+export async function syncChangedSessions({
+  sessions,
+  since,
+  until,
+  maxTargets = INCREMENTAL_MAX_TARGETS,
+  lookbackDays = INCREMENTAL_LOOKBACK_DAYS,
+  concurrency = INCREMENTAL_CONCURRENCY,
+}: {
+  sessions: WxSession[];
+  since: string;
+  until: string;
+  maxTargets?: number;
+  lookbackDays?: number;
+  concurrency?: number;
+}): Promise<IncrementalSyncResult> {
+  const groups = sessions.filter((s) => s.is_group && s.username && s.timestamp > 0);
+  const localLatest = latestMessageTimestamps();
+  const sinceTs = unixStartOfDay(since);
+  const untilTs = unixEndOfDay(until);
+
+  const targets = groups
+    .filter((s) => s.timestamp >= sinceTs && s.timestamp <= untilTs)
+    .filter((s) => s.timestamp > (localLatest.get(s.username) ?? 0))
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, Math.max(0, maxTargets));
+
+  if (targets.length === 0) {
+    return {
+      checked: groups.length,
+      targets: 0,
+      ok: 0,
+      failed: 0,
+      fetched: 0,
+      inserted: 0,
+      affectedDates: [],
+      failedTargets: [],
+    };
+  }
+
+  const affected = new Map<string, Set<string>>();
+  const limit = pLimit(Math.max(1, concurrency));
+  let ok = 0;
+  let failed = 0;
+  let fetched = 0;
+  let inserted = 0;
+  const failedTargets: Array<{ chatroom_id: string; name: string; error: string }> = [];
+
+  await Promise.all(
+    targets.map((s) =>
+      limit(async () => {
+        const latest = localLatest.get(s.username) ?? 0;
+        const fetchSince = latest > 0
+          ? dateFromUnix(Math.max(sinceTs, latest - 60))
+          : boundedLookbackSince(since, until, lookbackDays);
+        try {
+          const messages = await wxHistoryPaged(s.username, fetchSince, until, HISTORY_PAGE_SIZE, 3);
+          fetched += messages.length;
+          const newDates = new Set(
+            messages
+              .filter((m) => latest === 0 || m.timestamp >= latest)
+              .map(dateOfMessage)
+              .filter((d) => d !== 'unknown' && d >= since && d <= until),
+          );
+          const count = bulkInsertMessages(s.username, messages);
+          inserted += count;
+          if (messages.length > 0 || count > 0) {
+            const dates = affected.get(s.username) ?? new Set<string>();
+            for (const d of newDates) dates.add(d);
+            affected.set(s.username, dates);
+          }
+          ok++;
+        } catch (e) {
+          failed++;
+          failedTargets.push({
+            chatroom_id: s.username,
+            name: s.chat || s.username,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }),
+    ),
+  );
+
+  refreshAggregates(affected);
+  if (inserted > 0) {
+    rebuildMentionIndexFromMessages();
+    clearDerivedCaches(Array.from(new Set(Array.from(affected.values()).flatMap((s) => Array.from(s)))));
+  }
+
+  return {
+    checked: groups.length,
+    targets: targets.length,
+    ok,
+    failed,
+    fetched,
+    inserted,
+    affectedDates: Array.from(new Set(Array.from(affected.values()).flatMap((s) => Array.from(s)))).sort(),
+    failedTargets,
+  };
+}
+
+async function wxHistoryPaged(
+  chatroomId: string,
+  since: string,
+  until: string,
+  pageSize = HISTORY_PAGE_SIZE,
+  maxPages = HISTORY_MAX_PAGES,
+): Promise<WxMessage[]> {
+  const all: WxMessage[] = [];
+  const seen = new Set<number>();
+  for (let page = 0; page < Math.max(1, maxPages); page++) {
+    const offset = page * pageSize;
+    const batch = await wxHistory(chatroomId, since, until, pageSize, offset);
+    for (const m of batch) {
+      if (seen.has(m.local_id)) continue;
+      seen.add(m.local_id);
+      all.push(m);
+    }
+    if (batch.length < pageSize) break;
+  }
+  return all.sort((a, b) => (a.timestamp - b.timestamp) || (a.local_id - b.local_id));
+}
+
+function refreshAggregates(affected: Map<string, Set<string>>) {
+  for (const [chatroomId, datesSet] of affected.entries()) {
+    const dates = Array.from(datesSet).sort();
+    if (dates.length === 0) continue;
+    const buckets = aggregateDailyStats(chatroomId, dates);
+    for (const b of buckets) {
+      saveStats({
+        chatroom_id: chatroomId,
+        date: b.date,
+        total: b.total,
+        top_senders: b.top_senders,
+        by_hour: b.by_hour,
+      });
+    }
+
+    const firstRow = db()
+      .prepare(
+        'SELECT MIN(date) AS d, MAX(date) AS dx, COUNT(*) AS n FROM messages WHERE chatroom_id = ?',
+      )
+      .get(chatroomId) as { d: string | null; dx: string | null; n: number };
+    upsertSyncState(chatroomId, firstRow.n, firstRow.d, firstRow.dx, {
+      status: firstRow.n > 0 ? 'ok' : 'empty',
+      totalChunks: dates.length,
+    });
+  }
+}
+
+function clearDerivedCaches(dates: string[]) {
+  cache.flushAll();
+  if (dates.length === 0) return;
+  const placeholders = dates.map(() => '?').join(',');
+  db()
+    .prepare(`DELETE FROM link_intelligence_cache WHERE date IN (${placeholders})`)
+    .run(...dates);
+}
+
+function boundedLookbackSince(since: string, until: string, days: number): string {
+  const end = parseLocalDate(until);
+  end.setDate(end.getDate() - Math.max(0, days - 1));
+  const candidate = ymd(end);
+  return candidate > since ? candidate : since;
+}
+
+function unixStartOfDay(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  return Math.floor(new Date(year, month - 1, day, 0, 0, 0, 0).getTime() / 1000);
+}
+
+function unixEndOfDay(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  return Math.floor(new Date(year, month - 1, day, 23, 59, 59, 999).getTime() / 1000);
+}
+
+function dateFromUnix(timestamp: number): string {
+  return ymd(new Date(timestamp * 1000));
+}
+
+function parseLocalDate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 /**

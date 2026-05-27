@@ -27,7 +27,12 @@ export async function GET(req: NextRequest) {
 
   const found = await resolveWxImage(localId, resolvedMonth);
   if (!found) {
-    return new Response('image not found in wx cache', { status: 404 });
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
   }
 
   const buf = await readFile(found.path);

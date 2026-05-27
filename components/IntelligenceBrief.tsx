@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Check,
   Clipboard,
+  EyeOff,
   ExternalLink,
   FileText,
   Link2,
@@ -127,14 +128,33 @@ type QueueItem = {
   external?: boolean;
 };
 
-export default function IntelligenceBrief({ intelligence }: { intelligence?: DashboardIntelligence }) {
+export default function IntelligenceBrief({
+  intelligence,
+  onIgnoreSignal,
+}: {
+  intelligence?: DashboardIntelligence;
+  onIgnoreSignal?: (item: DashboardSignalItem) => Promise<void> | void;
+}) {
   const data = intelligence ?? EMPTY;
+  const [hiddenSignalKeys, setHiddenSignalKeys] = useState<Set<string>>(() => new Set());
+  const visibleMustRead = useMemo(
+    () => data.must_read.filter((item) => !hiddenSignalKeys.has(signalKey(item))),
+    [data.must_read, hiddenSignalKeys],
+  );
+  const visibleActionItems = useMemo(
+    () => data.action_items.filter((item) => !hiddenSignalKeys.has(signalKey(item))),
+    [data.action_items, hiddenSignalKeys],
+  );
+  const visibleData = useMemo(
+    () => ({ ...data, must_read: visibleMustRead, action_items: visibleActionItems }),
+    [data, visibleActionItems, visibleMustRead],
+  );
   const articles = data.link_highlights.filter((item) => item.kind === 'article');
   const tools = data.link_highlights.filter((item) => item.kind === 'tool');
-  const summary = useMemo(() => buildSummary(data, articles, tools), [data, articles, tools]);
+  const summary = useMemo(() => buildSummary(visibleData, articles, tools), [visibleData, articles, tools]);
   const queue = useMemo(
     () => ({
-      messages: data.must_read.slice(0, 2).map((item) => ({
+      messages: visibleMustRead.slice(0, 2).map((item) => ({
         title: item.title,
         href: `/groups/${encodeURIComponent(item.chatroom_id)}?date=${data.date}`,
       })),
@@ -154,7 +174,7 @@ export default function IntelligenceBrief({ intelligence }: { intelligence?: Das
         external: item.href?.startsWith('http') ?? false,
       })),
     }),
-    [articles, data.anomalies, data.date, data.must_read, tools],
+    [articles, data.anomalies, data.date, tools, visibleMustRead],
   );
   const [copied, setCopied] = useState(false);
 
@@ -162,6 +182,21 @@ export default function IntelligenceBrief({ intelligence }: { intelligence?: Das
     await navigator.clipboard.writeText(summary);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
+  }
+
+  async function ignoreSignal(item: DashboardSignalItem) {
+    const key = signalKey(item);
+    setHiddenSignalKeys((prev) => new Set(prev).add(key));
+    try {
+      await onIgnoreSignal?.(item);
+    } catch (e) {
+      setHiddenSignalKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      console.error(e);
+    }
   }
 
   return (
@@ -205,7 +240,12 @@ export default function IntelligenceBrief({ intelligence }: { intelligence?: Das
       </section>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_1fr_0.85fr]">
-        <MustReadPanel date={data.date} items={data.must_read} actions={data.action_items} />
+        <MustReadPanel
+          date={data.date}
+          items={visibleMustRead}
+          actions={visibleActionItems}
+          onIgnore={ignoreSignal}
+        />
         <ResourcePanel articles={articles} tools={tools} />
         <WatchPanel date={data.date} anomalies={data.anomalies} people={data.people_radar} />
       </div>
@@ -273,10 +313,12 @@ function MustReadPanel({
   date,
   items,
   actions,
+  onIgnore,
 }: {
   date: string;
   items: DashboardSignalItem[];
   actions: DashboardActionItem[];
+  onIgnore: (item: DashboardSignalItem) => void;
 }) {
   const promoted = mergeSignals(actions, items).slice(0, 7);
   return (
@@ -291,15 +333,17 @@ function MustReadPanel({
       ) : (
         <div className="mt-3 space-y-1.5">
           {promoted.map((item, index) => (
-            <Link
+            <div
               key={`${item.chatroom_id}:${item.local_id}`}
-              href={`/groups/${encodeURIComponent(item.chatroom_id)}?date=${date}`}
-              className="grid grid-cols-[24px_1fr_16px] items-start gap-2 rounded-md px-2 py-2 transition-colors hover:bg-[var(--surface-2)]"
+              className="grid grid-cols-[24px_1fr_26px] items-start gap-2 rounded-md px-2 py-2 transition-colors hover:bg-[var(--surface-2)]"
             >
               <span className="rounded bg-[var(--surface-2)] py-0.5 text-center text-[10px] tabular-nums text-[var(--text-3)]">
                 {index + 1}
               </span>
-              <span className="min-w-0">
+              <Link
+                href={`/groups/${encodeURIComponent(item.chatroom_id)}?date=${date}`}
+                className="min-w-0"
+              >
                 <span className="flex items-start justify-between gap-2">
                   <span className="line-clamp-2 text-[12px] font-medium leading-snug text-[var(--text)]">
                     {item.title}
@@ -319,9 +363,16 @@ function MustReadPanel({
                 <span className="mt-1 line-clamp-1 text-[10px] text-[var(--text-3)]">
                   {'why' in item ? (item as DashboardActionItem).why : item.reasons.join(' / ')}
                 </span>
-              </span>
-              <ArrowRight size={12} className="mt-0.5 text-[var(--text-3)]" />
-            </Link>
+              </Link>
+              <button
+                type="button"
+                className="rounded p-1 text-[var(--text-3)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--warn)]"
+                title="忽略此条，之后不再显示"
+                onClick={() => onIgnore(item)}
+              >
+                <EyeOff size={13} />
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -505,6 +556,10 @@ function mergeSignals(actions: DashboardActionItem[], mustRead: DashboardSignalI
     out.push(item);
   }
   return out;
+}
+
+function signalKey(item: DashboardSignalItem) {
+  return `${item.chatroom_id}:${item.local_id}`;
 }
 
 function buildSummary(

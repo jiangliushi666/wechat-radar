@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { wxSessions } from '@/lib/wx';
-import type { WxSession } from '@/lib/wx-types';
-import { listCachedStatsRange } from '@/lib/stats-aggregator';
+import { listCachedStatsRange, syncChangedSessions } from '@/lib/stats-aggregator';
 import { listAllTags, listGroups, listFavorites } from '@/lib/groups';
 import { effectiveGroupIds } from '@/lib/group-classifier';
 import { rangeToWindow, dateList, normalizeDate, normalizeRangeKey } from '@/lib/range';
 import { countMentionsBetween } from '@/lib/mentions';
 import { buildDashboardIntelligence } from '@/lib/dashboard-intelligence';
-import { cache, CK } from '@/lib/cache';
-import { db } from '@/lib/db';
 import { readConfig } from '@/lib/config';
+import { loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,10 +17,21 @@ export async function GET(req: NextRequest) {
     const anchorDate = normalizeDate(url.searchParams.get('date'));
     const w = rangeToWindow(range, anchorDate);
 
-  const sessions = await loadSessionsSafe(500);
+  const cfg = readConfig();
+  const sessionLoad = await loadSessionsSafe(500);
+  const sessions = sessionLoad.sessions;
   const groups = sessions.filter((s) => s.is_group);
   const groupNames = new Map(groups.map((g) => [g.username, g.chat]));
   const allCount = groups.length;
+
+  const freshness = cfg.demoMode
+    ? null
+    : await syncChangedSessions({ sessions: groups, since: w.since, until: w.until })
+        .then((result) => ({ ...result, sessions: sessionSummary(sessionLoad) }))
+        .catch((e) => ({
+          error: e instanceof Error ? e.message : 'unknown error',
+          sessions: sessionSummary(sessionLoad),
+        }));
 
   const cached = listCachedStatsRange(w.since, w.until);
   const totalMessages = cached.reduce((sum, r) => sum + r.total, 0);
@@ -151,67 +159,13 @@ export async function GET(req: NextRequest) {
         favorites: favorites.length,
         unsorted: unsortedCount,
       },
+      freshness,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'unknown error';
     console.error('/api/stats failed', e);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
-}
-
-async function loadSessionsSafe(limit: number): Promise<WxSession[]> {
-  if (readConfig().demoMode) return listLocalSessionsFallback(limit);
-  const cached = cache.get(CK.sessions()) as WxSession[] | undefined;
-  try {
-    const sessions = await wxSessions(limit);
-    cache.set(CK.sessions(), sessions, 60);
-    return sessions;
-  } catch (e) {
-    if (cached?.length) return cached;
-    console.warn('wx sessions failed, falling back to local radar.db', e);
-    return listLocalSessionsFallback(limit);
-  }
-}
-
-function listLocalSessionsFallback(limit: number): WxSession[] {
-  const rows = db()
-    .prepare(
-      `
-      SELECT m.chatroom_id, m.sender, m.content, m.time, m.timestamp, m.type
-      FROM messages m
-      JOIN (
-        SELECT chatroom_id, MAX(timestamp) AS timestamp
-        FROM messages
-        GROUP BY chatroom_id
-      ) latest
-        ON latest.chatroom_id = m.chatroom_id
-       AND latest.timestamp = m.timestamp
-      GROUP BY m.chatroom_id
-      ORDER BY m.timestamp DESC
-      LIMIT ?
-    `,
-    )
-    .all(limit) as Array<{
-    chatroom_id: string;
-    sender: string;
-    content: string;
-    time: string;
-    timestamp: number;
-    type: string;
-  }>;
-
-  return rows.map((r) => ({
-    chat: r.chatroom_id,
-    chat_type: 'group',
-    is_group: true,
-    last_msg_type: r.type,
-    last_sender: r.sender,
-    summary: r.content,
-    time: r.time,
-    timestamp: r.timestamp,
-    unread: 0,
-    username: r.chatroom_id,
-  }));
 }
 
 function unixStartOfDay(date: string) {
@@ -222,4 +176,18 @@ function unixStartOfDay(date: string) {
 function unixEndOfDay(date: string) {
   const [year, month, day] = date.split('-').map(Number);
   return Math.floor(new Date(year, month - 1, day, 23, 59, 59, 999).getTime() / 1000);
+}
+
+function sessionSummary(load: Awaited<ReturnType<typeof loadSessionsSafe>>) {
+  return {
+    source: load.source,
+    partial: load.partial,
+    total: load.total,
+    groups: load.groupCount,
+    live_total: load.liveCount,
+    live_groups: load.liveGroupCount,
+    known_total: load.knownCount,
+    known_groups: load.knownGroupCount,
+    cached_total: load.cachedCount,
+  };
 }

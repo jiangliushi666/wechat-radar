@@ -27,7 +27,12 @@ async function wxJson<T>(args: string[], opts = DEFAULT_OPTS): Promise<T> {
 }
 
 export async function wxSessions(limit = 500): Promise<WxSession[]> {
-  return wxJson<WxSession[]>(['sessions', '-n', String(limit)]);
+  const out = await wxJson<WxSession[] | { sessions?: WxSession[] }>([
+    'sessions',
+    '-n',
+    String(limit),
+  ]);
+  return Array.isArray(out) ? out : (out.sessions ?? []);
 }
 
 export async function wxStats(
@@ -43,8 +48,10 @@ export async function wxHistory(
   since: string,
   until: string,
   limit = 1000,
+  offset = 0,
 ): Promise<WxMessage[]> {
-  return wxJson<WxMessage[]>([
+  let out: WxMessage[] | { messages?: WxMessage[] };
+  const args = [
     'history',
     chat,
     '--since',
@@ -53,15 +60,30 @@ export async function wxHistory(
     until,
     '-n',
     String(limit),
-  ]);
+  ];
+  if (offset > 0) args.push('--offset', String(offset));
+  try {
+    out = await wxJson<WxMessage[] | { messages?: WxMessage[] }>(args);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes('找不到') && message.includes('消息记录')) return [];
+    throw e;
+  }
+  return Array.isArray(out) ? out : (out.messages ?? []);
 }
 
 export async function wxNewMessages(limit = 50): Promise<WxNewMessage[]> {
-  return wxJson<WxNewMessage[]>(['new-messages', '-n', String(limit)]);
+  const out = await wxJson<WxNewMessage[] | { messages?: WxNewMessage[] }>([
+    'new-messages',
+    '-n',
+    String(limit),
+  ]);
+  return Array.isArray(out) ? out : (out.messages ?? []);
 }
 
 export async function wxMembers(chat: string): Promise<WxMember[]> {
-  return wxJson<WxMember[]>(['members', chat]);
+  const out = await wxJson<WxMember[] | { members?: WxMember[] }>(['members', chat]);
+  return Array.isArray(out) ? out : (out.members ?? []);
 }
 
 export async function wxDaemonStatus(): Promise<WxDaemonStatus> {

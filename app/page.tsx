@@ -7,7 +7,10 @@ import StatGrid, { type CardsData } from '@/components/StatGrid';
 import TrendChart, { type TrendPoint } from '@/components/TrendChart';
 import ActiveGroupsList, { type ActiveGroup } from '@/components/ActiveGroupsList';
 import CategoryChart, { type CategoryStat } from '@/components/CategoryChart';
-import IntelligenceBrief, { type DashboardIntelligence } from '@/components/IntelligenceBrief';
+import IntelligenceBrief, {
+  type DashboardIntelligence,
+  type DashboardSignalItem,
+} from '@/components/IntelligenceBrief';
 
 type StatsResponse = {
   ok: boolean;
@@ -70,6 +73,45 @@ export default function Page() {
       cancelled = true;
     };
   }, [range, date, setupChecked]);
+
+  useEffect(() => {
+    if (!setupChecked || rescanning) return;
+    let cancelled = false;
+    let inFlight = false;
+    const timer = window.setInterval(async () => {
+      if (document.visibilityState !== 'visible' || inFlight) return;
+      inFlight = true;
+      try {
+        const j = await fetchStats(range, date);
+        if (!cancelled) setStats(j);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        inFlight = false;
+      }
+    }, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [date, range, rescanning, setupChecked]);
+
+  const ignoreSignal = useCallback(
+    async (item: DashboardSignalItem) => {
+      const r = await fetch('/api/ignored-items', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'dashboard_signal',
+          item_key: `${item.chatroom_id}:${item.local_id}`,
+          title: item.title,
+        }),
+      });
+      if (!r.ok) throw new Error('ignore failed');
+      await reload();
+    },
+    [reload],
+  );
 
   const runRescan = useCallback(
     async (full: boolean) => {
@@ -159,7 +201,7 @@ export default function Page() {
           <StatGrid cards={stats?.cards} days={stats?.window.days ?? 7} />
 
           <div className="mt-4">
-            <IntelligenceBrief intelligence={stats?.intelligence} />
+            <IntelligenceBrief intelligence={stats?.intelligence} onIgnoreSignal={ignoreSignal} />
           </div>
 
           <div className="mt-4">

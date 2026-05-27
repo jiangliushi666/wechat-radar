@@ -71,6 +71,20 @@ export function listMessagesForDate(chatroomId: string, date: string, limit = 10
     .all(chatroomId, date, limit) as MessageRow[];
 }
 
+export function latestMessageTimestamp(chatroomId: string): number {
+  const row = db()
+    .prepare('SELECT COALESCE(MAX(timestamp), 0) AS ts FROM messages WHERE chatroom_id = ?')
+    .get(chatroomId) as { ts: number };
+  return row.ts ?? 0;
+}
+
+export function latestMessageTimestamps(): Map<string, number> {
+  const rows = db()
+    .prepare('SELECT chatroom_id, COALESCE(MAX(timestamp), 0) AS ts FROM messages GROUP BY chatroom_id')
+    .all() as Array<{ chatroom_id: string; ts: number }>;
+  return new Map(rows.map((r) => [r.chatroom_id, r.ts ?? 0]));
+}
+
 export interface DailyStatsAggregate {
   date: string;
   total: number;

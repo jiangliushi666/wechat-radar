@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { countMentions, listMentions, markMentionsSeen } from '@/lib/mentions';
-import { wxSessions } from '@/lib/wx';
+import { loadSessionsSafe, sessionNameMap } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,9 +8,8 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 1000), 1), 5000);
 
-  const sessions = await wxSessions(500);
-  const nameByChatroom = new Map<string, string>();
-  for (const s of sessions) nameByChatroom.set(s.username, s.chat);
+  const sessionLoad = await loadSessionsSafe(500);
+  const nameByChatroom = sessionNameMap(sessionLoad.sessions);
 
   const items = listMentions(limit).map((m) => ({
     ...m,
