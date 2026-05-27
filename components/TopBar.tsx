@@ -21,6 +21,7 @@ export default function TopBar({
   rescanning,
   onRescan,
   onFullSync,
+  extraActions,
   rescanInfo,
 }: {
   range: RangeKey;
@@ -30,6 +31,7 @@ export default function TopBar({
   rescanning: boolean;
   onRescan: () => void;
   onFullSync?: () => void;
+  extraActions?: React.ReactNode;
   rescanInfo?: string;
 }) {
   return (
@@ -65,6 +67,8 @@ export default function TopBar({
             </SegBtn>
           ))}
         </SegGroup>
+
+        {extraActions}
 
         {onFullSync && (
           <button

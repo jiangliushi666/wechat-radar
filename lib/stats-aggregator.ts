@@ -10,6 +10,7 @@ import {
 } from './messages-store';
 import { rebuildMentionIndexFromMessages } from './mentions';
 import { cache } from './cache';
+import { isTrackableSession } from './session-source';
 import type { WxMessage, WxSession, WxStats } from './wx-types';
 
 export type StatsRow = {
@@ -341,12 +342,12 @@ export async function syncChangedSessions({
   lookbackDays?: number;
   concurrency?: number;
 }): Promise<IncrementalSyncResult> {
-  const groups = sessions.filter((s) => s.is_group && s.username && s.timestamp > 0);
+  const trackable = sessions.filter((s) => isTrackableSession(s) && s.timestamp > 0);
   const localLatest = latestMessageTimestamps();
   const sinceTs = unixStartOfDay(since);
   const untilTs = unixEndOfDay(until);
 
-  const targets = groups
+  const targets = trackable
     .filter((s) => s.timestamp >= sinceTs && s.timestamp <= untilTs)
     .filter((s) => s.timestamp > (localLatest.get(s.username) ?? 0))
     .sort((a, b) => b.timestamp - a.timestamp)
@@ -354,7 +355,7 @@ export async function syncChangedSessions({
 
   if (targets.length === 0) {
     return {
-      checked: groups.length,
+      checked: trackable.length,
       targets: 0,
       ok: 0,
       failed: 0,
@@ -416,7 +417,7 @@ export async function syncChangedSessions({
   }
 
   return {
-    checked: groups.length,
+    checked: trackable.length,
     targets: targets.length,
     ok,
     failed,

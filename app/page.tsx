@@ -6,7 +6,8 @@ import TopBar, { type RangeKey } from '@/components/TopBar';
 import StatGrid, { type CardsData } from '@/components/StatGrid';
 import TrendChart, { type TrendPoint } from '@/components/TrendChart';
 import ActiveGroupsList, { type ActiveGroup } from '@/components/ActiveGroupsList';
-import CategoryChart, { type CategoryStat } from '@/components/CategoryChart';
+import ChatRankingsList, { type ChatRanking } from '@/components/ChatRankingsList';
+import InfographicGenerator from '@/components/InfographicGenerator';
 import IntelligenceBrief, {
   type DashboardIntelligence,
   type DashboardSignalItem,
@@ -20,7 +21,7 @@ type StatsResponse = {
   cards: CardsData;
   trend: { data: TrendPoint[]; peak: TrendPoint; avg: number; total: number };
   active_groups: ActiveGroup[];
-  categories: CategoryStat[];
+  chat_rankings: ChatRanking[];
   intelligence: DashboardIntelligence;
 };
 
@@ -143,7 +144,7 @@ export default function Page() {
             try {
               const evt = JSON.parse(chunk.slice(5).trim());
               if (evt.type === 'start') {
-                setRescanInfo(`同步 ${evt.groups} 群 · ${evt.since} ~ ${evt.until}`);
+                setRescanInfo(`同步 ${evt.chats ?? evt.groups} 个会话 · ${evt.since} ~ ${evt.until}`);
               } else if (evt.type === 'progress') {
                 const pct = Math.floor((evt.done / evt.total) * 100);
                 setRescanInfo(
@@ -194,6 +195,7 @@ export default function Page() {
           rescanning={rescanning}
           onRescan={() => runRescan(false)}
           onFullSync={() => runRescan(true)}
+          extraActions={<InfographicGenerator stats={stats} />}
           rescanInfo={rescanInfo ?? infoLine(stats)}
         />
 
@@ -215,7 +217,7 @@ export default function Page() {
 
           <div className="mt-4 grid grid-cols-1 gap-4 2xl:grid-cols-[1.4fr_1fr]">
             <ActiveGroupsList groups={stats?.active_groups ?? []} date={stats?.window.until ?? date} />
-            <CategoryChart categories={stats?.categories ?? []} />
+            <ChatRankingsList chats={stats?.chat_rankings ?? []} date={stats?.window.until ?? date} />
           </div>
         </div>
       </main>
@@ -233,7 +235,7 @@ function localToday(): string {
 
 function infoLine(stats: StatsResponse | null) {
   if (!stats) return undefined;
-  return `${stats.window.since} ~ ${stats.window.until} · 共 ${stats.cards.total_groups} 个群`;
+  return `${stats.window.since} ~ ${stats.window.until} · 共 ${stats.cards.total_groups} 个会话`;
 }
 
 async function fetchStats(range: RangeKey, date: string): Promise<StatsResponse> {

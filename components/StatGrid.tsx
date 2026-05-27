@@ -15,9 +15,9 @@ export default function StatGrid({ cards, days }: { cards?: CardsData; days: num
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       <Card
         icon={<Activity size={14} className="text-[var(--accent)]" />}
-        label="活跃群"
+        label="活跃会话"
         value={cards?.active_groups ?? '—'}
-        sub={cards ? `共扫 ${cards.total_groups} 个群` : '等待扫描'}
+        sub={cards ? `共扫 ${cards.total_groups} 个会话` : '等待扫描'}
       />
       <Card
         icon={<MessageCircle size={14} className="text-[var(--accent)]" />}
@@ -25,7 +25,7 @@ export default function StatGrid({ cards, days }: { cards?: CardsData; days: num
         value={cards?.total_messages?.toLocaleString() ?? '—'}
         sub={
           cards
-            ? `过去 ${days * 24}h · 平均每群 ${cards.avg_per_group} 条`
+            ? `过去 ${days * 24}h · 平均每会话 ${cards.avg_per_group} 条`
             : '等待扫描'
         }
       />
@@ -39,7 +39,7 @@ export default function StatGrid({ cards, days }: { cards?: CardsData; days: num
       />
       <Card
         icon={<MoonStar size={14} className="text-[var(--text-3)]" />}
-        label="静默群"
+        label="静默会话"
         value={cards?.silent_groups ?? '—'}
         sub={cards ? `过去 ${days * 24}h 无活动` : '等待扫描'}
       />

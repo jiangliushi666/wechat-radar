@@ -12,11 +12,14 @@ export interface SessionLoadResult {
   partial: boolean;
   liveCount: number | null;
   liveGroupCount: number | null;
+  liveContactCount: number | null;
   knownCount: number;
   knownGroupCount: number;
+  knownContactCount: number;
   cachedCount: number;
   total: number;
   groupCount: number;
+  contactCount: number;
 }
 
 const PARTIAL_GROUP_RATIO = Number(process.env.WECHAT_RADAR_SESSION_PARTIAL_RATIO ?? 0.75);
@@ -32,6 +35,7 @@ export async function loadSessionsSafe(limit = 500): Promise<SessionLoadResult> 
       partial: false,
       liveCount: null,
       liveGroupCount: null,
+      liveContactCount: null,
       known,
       cached,
     });
@@ -53,6 +57,7 @@ export async function loadSessionsSafe(limit = 500): Promise<SessionLoadResult> 
       partial,
       liveCount: live.length,
       liveGroupCount: groupCount(live),
+      liveContactCount: contactCount(live),
       known,
       cached,
     });
@@ -63,6 +68,7 @@ export async function loadSessionsSafe(limit = 500): Promise<SessionLoadResult> 
         partial: true,
         liveCount: null,
         liveGroupCount: null,
+        liveContactCount: null,
         known,
         cached,
       });
@@ -74,6 +80,7 @@ export async function loadSessionsSafe(limit = 500): Promise<SessionLoadResult> 
         partial: true,
         liveCount: null,
         liveGroupCount: null,
+        liveContactCount: null,
         known,
         cached,
       });
@@ -84,6 +91,7 @@ export async function loadSessionsSafe(limit = 500): Promise<SessionLoadResult> 
       partial: true,
       liveCount: null,
       liveGroupCount: null,
+      liveContactCount: null,
       known,
       cached,
     });
@@ -105,6 +113,7 @@ function buildResult(
     partial: boolean;
     liveCount: number | null;
     liveGroupCount: number | null;
+    liveContactCount: number | null;
     known: WxSession[];
     cached: WxSession[];
   },
@@ -115,11 +124,14 @@ function buildResult(
     partial: meta.partial,
     liveCount: meta.liveCount,
     liveGroupCount: meta.liveGroupCount,
+    liveContactCount: meta.liveContactCount,
     knownCount: meta.known.length,
     knownGroupCount: groupCount(meta.known),
+    knownContactCount: contactCount(meta.known),
     cachedCount: meta.cached.length,
     total: sessions.length,
     groupCount: groupCount(sessions),
+    contactCount: contactCount(sessions),
   };
 }
 
@@ -271,18 +283,21 @@ function listLocalSessionsFallback(limit: number): WxSession[] {
     type: string;
   }>;
 
-  return rows.map((r) => ({
-    chat: r.chatroom_id,
-    chat_type: 'group',
-    is_group: true,
-    last_msg_type: r.type,
-    last_sender: r.sender,
-    summary: r.content,
-    time: r.time,
-    timestamp: r.timestamp,
-    unread: 0,
-    username: r.chatroom_id,
-  }));
+  return rows.map((r) => {
+    const isGroup = r.chatroom_id.endsWith('@chatroom');
+    return {
+      chat: r.chatroom_id,
+      chat_type: isGroup ? 'group' : 'private',
+      is_group: isGroup,
+      last_msg_type: r.type,
+      last_sender: r.sender,
+      summary: r.content,
+      time: r.time,
+      timestamp: r.timestamp,
+      unread: 0,
+      username: r.chatroom_id,
+    };
+  });
 }
 
 function normalizeSession(s: WxSession): WxSession {
@@ -302,4 +317,16 @@ function normalizeSession(s: WxSession): WxSession {
 
 function groupCount(sessions: WxSession[]): number {
   return sessions.filter((s) => s.is_group).length;
+}
+
+export function isContactSession(s: WxSession): boolean {
+  return !s.is_group && s.chat_type === 'private';
+}
+
+export function isTrackableSession(s: WxSession): boolean {
+  return Boolean(s.username) && (s.is_group || isContactSession(s));
+}
+
+function contactCount(sessions: WxSession[]): number {
+  return sessions.filter(isContactSession).length;
 }

@@ -6,7 +6,7 @@ import { rangeToWindow, dateList, normalizeDate, normalizeRangeKey } from '@/lib
 import { countMentionsBetween } from '@/lib/mentions';
 import { buildDashboardIntelligence } from '@/lib/dashboard-intelligence';
 import { readConfig } from '@/lib/config';
-import { loadSessionsSafe } from '@/lib/session-source';
+import { isContactSession, isTrackableSession, loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,12 +21,13 @@ export async function GET(req: NextRequest) {
   const sessionLoad = await loadSessionsSafe(500);
   const sessions = sessionLoad.sessions;
   const groups = sessions.filter((s) => s.is_group);
-  const groupNames = new Map(groups.map((g) => [g.username, g.chat]));
-  const allCount = groups.length;
+  const trackableSessions = sessions.filter(isTrackableSession);
+  const sessionNames = new Map(trackableSessions.map((s) => [s.username, s.chat]));
+  const allCount = trackableSessions.length;
 
   const freshness = cfg.demoMode
     ? null
-    : await syncChangedSessions({ sessions: groups, since: w.since, until: w.until })
+    : await syncChangedSessions({ sessions: trackableSessions, since: w.since, until: w.until })
         .then((result) => ({ ...result, sessions: sessionSummary(sessionLoad) }))
         .catch((e) => ({
           error: e instanceof Error ? e.message : 'unknown error',
@@ -59,20 +60,29 @@ export async function GET(req: NextRequest) {
     }
     sendersByGroup.set(r.chatroom_id, senderMap);
   }
-  const active = groups.filter((g) => (totalsByGroup.get(g.username) ?? 0) > 0).length;
+  const active = trackableSessions.filter((s) => (totalsByGroup.get(s.username) ?? 0) > 0).length;
   const silent = allCount - active;
 
-  const topActiveGroups = groups
-    .map((g) => ({
-      chatroom_id: g.username,
-      name: g.chat,
-      summary: g.summary,
-      total: totalsByGroup.get(g.username) ?? 0,
-      top_senders: Array.from(sendersByGroup.get(g.username)?.entries() ?? [])
+  const chatRankings = trackableSessions
+    .map((s) => ({
+      chatroom_id: s.username,
+      name: s.chat,
+      chat_type: s.chat_type,
+      is_group: s.is_group,
+      kind: s.is_group ? 'group' : isContactSession(s) ? 'contact' : 'other',
+      summary: s.summary,
+      total: totalsByGroup.get(s.username) ?? 0,
+      top_senders: Array.from(sendersByGroup.get(s.username)?.entries() ?? [])
         .map(([sender, count]) => ({ sender, count }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 3),
+      last_time: s.time,
+      timestamp: s.timestamp,
+      unread: s.unread,
     }))
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const topActiveGroups = chatRankings
     .filter((g) => g.total > 0)
     .sort((a, b) => b.total - a.total);
 
@@ -152,8 +162,9 @@ export async function GET(req: NextRequest) {
         total: sumTrend,
       },
       active_groups: topActiveGroups,
+      chat_rankings: chatRankings,
       categories: categoryStats,
-      intelligence: buildDashboardIntelligence(w.until, groupNames),
+      intelligence: buildDashboardIntelligence(w.until, sessionNames),
       sidebar_counts: {
         all: allCount,
         favorites: favorites.length,
@@ -186,8 +197,11 @@ function sessionSummary(load: Awaited<ReturnType<typeof loadSessionsSafe>>) {
     groups: load.groupCount,
     live_total: load.liveCount,
     live_groups: load.liveGroupCount,
+    live_contacts: load.liveContactCount,
     known_total: load.knownCount,
     known_groups: load.knownGroupCount,
+    known_contacts: load.knownContactCount,
+    contacts: load.contactCount,
     cached_total: load.cachedCount,
   };
 }

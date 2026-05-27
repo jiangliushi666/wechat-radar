@@ -4,7 +4,7 @@ import { normalizeDate, normalizeRangeKey, rangeToWindow, type RangeKey } from '
 import { readConfig } from '@/lib/config';
 import { cache, CK } from '@/lib/cache';
 import { buildTopicsForDate } from '@/lib/topics';
-import { loadSessionsSafe } from '@/lib/session-source';
+import { isTrackableSession, loadSessionsSafe } from '@/lib/session-source';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 1800; // 30 min
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   const sessionLoad = await loadSessionsSafe(500);
   const targets = sessionLoad.sessions
-    .filter((s) => s.is_group)
+    .filter(isTrackableSession)
     .map((s) => ({ chatroomId: s.username, display: s.chat }));
 
   const cfg = readConfig();
@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
         since,
         until,
         groups: targets.length,
+        chats: targets.length,
         session_source: sessionLoad.source,
         session_partial: sessionLoad.partial,
       });
